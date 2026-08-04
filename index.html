@@ -106,6 +106,8 @@ main{padding:32px 0 80px}
 .not-found{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;gap:14px}
 @media(max-width:600px){.gallery-grid{grid-template-columns:repeat(2,1fr)}.video-grid{grid-template-columns:1fr}.link-row{flex-direction:column}.link-box{width:100%}}
 #auth-view{display:none;min-height:100vh;align-items:center;justify-content:center;padding:20px}
+#home-view{display:none}
+.load-err{max-width:380px;margin:80px auto;text-align:center;padding:24px;color:var(--muted)}
 .auth-card{max-width:380px;width:100%}
 .auth-tabs{display:flex;gap:8px;margin-bottom:18px}
 .auth-tab{flex:1;text-align:center;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);cursor:pointer;font-weight:700;font-size:0.85rem}
@@ -216,9 +218,16 @@ main{padding:32px 0 80px}
 <div class="toast" id="toast"></div>
 
 <script>
-const SUPABASE_URL = 'https://ypuavudfjlwbcyiiyscy.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_nVyJVI2xWRm4Z7VKHk6sGw_wFd5tawP';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let sb;
+try{
+  if(typeof supabase==='undefined')throw new Error('La librería no cargó (conexión lenta o bloqueada)');
+  const SUPABASE_URL = 'https://ypuavudfjlwbcyiiyscy.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_nVyJVI2xWRm4Z7VKHk6sGw_wFd5tawP';
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+}catch(e){
+  document.body.innerHTML=`<div class="load-err"><div style="font-size:2.5rem;margin-bottom:12px">⚠️</div><div style="font-weight:700;margin-bottom:8px">No se pudo cargar VaultShare</div><div style="font-size:0.85rem;margin-bottom:16px">Revisa tu conexión a internet e intenta de nuevo.</div><button class="btn btn-primary" style="width:auto;padding:10px 24px" onclick="location.reload()">🔄 Reintentar</button></div>`;
+  throw e;
+}
 
 let selectedFiles = [];
 let lbImages = [];
@@ -295,18 +304,4 @@ sb.auth.onAuthStateChange((_event,_session)=>{refreshSession()});
 document.getElementById('file-input').addEventListener('change',e=>{addFiles(e.target.files)});
 const dz=document.getElementById('drop-zone');
 dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over')});
-dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
-dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');addFiles(e.dataTransfer.files)});
-
-function addFiles(files){selectedFiles=[...selectedFiles,...Array.from(files)];renderChips()}
-function removeFile(i){selectedFiles.splice(i,1);renderChips()}
-function renderChips(){
-  document.getElementById('chips').innerHTML=selectedFiles.map((f,i)=>`
-    <div class="chip">
-      <span>${f.type.startsWith('video')?'🎬':'🖼️'}</span>
-      <span>${f.name.length>18?f.name.slice(0,16)+'…':f.name}</span>
-      <button class="chip-rm" onclick="removeFile(${i})">✕</button>
-    </div>`).join('');
-}
-
-async function cre
+dz.addEventListener('dragl
