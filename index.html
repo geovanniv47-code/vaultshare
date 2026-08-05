@@ -466,7 +466,7 @@ async function loadPublic(folderId){
     content.innerHTML=`<div class="not-found"><div style="font-size:3rem">🔒</div><h2>Carpeta no encontrada</h2><p style="color:var(--muted)">Este enlace expiró o no existe.</p><button class="btn btn-ghost" onclick="location.hash=''">← Volver</button></div>`;
     return;
   }
-  sb.rpc('increment_folder_views',{fid:folderId});
+  sb.rpc('increment_folder_views',{fid:folderId}).then(()=>{});
   document.getElementById('pub-name').textContent=folder.name;
   document.getElementById('pub-meta').textContent=`⏱ Expira en ${timeLeft(folder.expires_at)} · ${folder.file_paths.length} archivo${folder.file_paths.length!==1?'s':''}`;
   document.getElementById('pub-views').textContent=`${folder.views+1} vista${folder.views+1!==1?'s':''}`;
