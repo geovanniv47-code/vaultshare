@@ -460,12 +460,13 @@ refreshSession();
 async function loadPublic(folderId){
   const content=document.getElementById('pub-content');
   content.innerHTML='<div style="text-align:center;padding:60px;color:var(--muted)"><div class="spinner" style="width:30px;height:30px;margin:auto"></div></div>';
-  const {data:folder,error}=await sb.from('folders').select('*').eq('folder_id',folderId).single();
+  const {data:rows,error}=await sb.rpc('get_public_folder',{fid:folderId});
+  const folder=rows&&rows[0];
   if(error||!folder||folder.expires_at<Date.now()){
     content.innerHTML=`<div class="not-found"><div style="font-size:3rem">🔒</div><h2>Carpeta no encontrada</h2><p style="color:var(--muted)">Este enlace expiró o no existe.</p><button class="btn btn-ghost" onclick="location.hash=''">← Volver</button></div>`;
     return;
   }
-  await sb.from('folders').update({views:folder.views+1}).eq('folder_id',folderId);
+  sb.rpc('increment_folder_views',{fid:folderId});
   document.getElementById('pub-name').textContent=folder.name;
   document.getElementById('pub-meta').textContent=`⏱ Expira en ${timeLeft(folder.expires_at)} · ${folder.file_paths.length} archivo${folder.file_paths.length!==1?'s':''}`;
   document.getElementById('pub-views').textContent=`${folder.views+1} vista${folder.views+1!==1?'s':''}`;
