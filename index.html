@@ -287,21 +287,223 @@ async function doLogout(){
 }
 
 async function refreshSession(){
-  const {data:{session}}=await sb.auth.getSession();
-  if(!session){
+  try{
+    const {data:{session}}=await sb.auth.getSession();
+    if(!session){
+      currentUser=null;currentProfile=null;
+      route();
+      return;
+    }
+    currentUser=session.user;
+    const {data:profile}=await sb.from('profiles').select('*').eq('id',currentUser.id).single();
+    currentProfile=profile;
+    document.getElementById('user-label').textContent=(profile?.name||currentUser.email)+(profile?.is_admin?' · admin':'');
+    route();
+  }catch(e){
+    console.error('refreshSession error',e);
+    try{await sb.auth.signOut()}catch(_){}
     currentUser=null;currentProfile=null;
     route();
-    return;
   }
-  currentUser=session.user;
-  const {data:profile}=await sb.from('profiles').select('*').eq('id',currentUser.id).single();
-  currentProfile=profile;
-  document.getElementById('user-label').textContent=(profile?.name||currentUser.email)+(profile?.is_admin?' · admin':'');
-  route();
 }
 sb.auth.onAuthStateChange((_event,_session)=>{refreshSession()});
 
 document.getElementById('file-input').addEventListener('change',e=>{addFiles(e.target.files)});
 const dz=document.getElementById('drop-zone');
 dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over')});
-dz.addEventListener('dragl
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');addFiles(e.dataTransfer.files)});
+
+function addFiles(files){selectedFiles=[...selectedFiles,...Array.from(files)];renderChips()}
+function removeFile(i){selectedFiles.splice(i,1);renderChips()}
+function renderChips(){
+  document.getElementById('chips').innerHTML=selectedFiles.map((f,i)=>`
+    <div class="chip">
+      <span>${f.type.startsWith('video')?'🎬':'🖼️'}</span>
+      <span>${f.name.length>18?f.name.slice(0,16)+'…':f.name}</span>
+      <button class="chip-rm" onclick="removeFile(${i})">✕</button>
+    </div>`).join('');
+}
+
+async function createFolder(){
+  if(!selectedFiles.length){showToast('⚠️ Agrega al menos un archivo');return}
+  const btn=document.getElementById('create-btn');
+  const pw=document.getElementById('progress-wrap');
+  const pb=document.getElementById('progress-bar');
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Subiendo…';
+  pw.style.display='block';pb.style.width='0%';
+  try{
+    const folderId=genId(12);
+    const folderName=document.getElementById('folder-name').value.trim()||'Carpeta-'+folderId.slice(0,5);
+    const expiresAt=Date.now()+24*60*60*1000;
+    const filePaths=[];
+    for(let i=0;i<selectedFiles.length;i++){
+      const file=selectedFiles[i];
+      const ext=file.name.split('.').pop();
+      const path=`${folderId}/${genId(8)}.${ext}`;
+      const {error}=await sb.storage.from('files').upload(path,file,{contentType:file.type});
+      if(error)throw error;
+      filePaths.push(path);
+      pb.style.width=Math.round(((i+1)/selectedFiles.length)*100)+'%';
+    }
+    const {error:dbErr}=await sb.from('folders').insert({folder_id:folderId,name:folderName,views:0,expires_at:expiresAt,file_paths:filePaths,owner_id:currentUser.id,owner_name:currentProfile?.name||currentUser.email});
+    if(dbErr)throw dbErr;
+    showToast('✅ Carpeta creada — enlace listo');
+    document.getElementById('folder-name').value='';
+    selectedFiles=[];renderChips();loadFolders();
+  }catch(e){console.error(e);showToast('❌ Error: '+e.message)}
+  btn.disabled=false;btn.innerHTML='🔗 Crear enlace compartido';
+  pw.style.display='none';
+}
+
+async function loadFolders(){
+  const {data,error}=await sb.from('folders').select('*').order('id',{ascending:false});
+  if(error){console.error(error);return}
+  const now=Date.now();
+  const valid=data.filter(f=>f.expires_at>now);
+  for(const f of data.filter(x=>x.expires_at<=now)) await deleteFolder(f.folder_id,false);
+  const list=document.getElementById('folders-list');
+  if(!valid.length){list.innerHTML='<div class="empty"><div class="empty-icon">🗂️</div><div>No hay carpetas activas.<br>Crea una para empezar.</div></div>';return}
+  list.innerHTML=valid.map(f=>folderCardHTML(f)).join('');
+}
+
+function folderCardHTML(f){
+  const link=`${location.origin}${location.pathname}#/s/${f.folder_id}`;
+  const tl=timeLeft(f.expires_at);
+  const isMine=f.owner_id===currentUser?.id;
+  const ownerPill=(!isMine&&currentProfile?.is_admin)?`<span class="pill pill-owner">👤 ${f.owner_name||'?'}</span>`:'';
+  const addBtn=isMine&&tl!=='Expirado'?`<button class="btn btn-sm btn-ghost" onclick="openAddFiles('${f.folder_id}')">➕ Agregar archivos</button>`:'';
+  return`<div class="folder-card">
+    <div class="folder-name">${f.name}</div>
+    <div class="pills">
+      <span class="pill pill-files">📁 ${f.file_paths.length} archivo${f.file_paths.length!==1?'s':''}</span>
+      <span class="pill pill-views">👁 ${f.views} vista${f.views!==1?'s':''}</span>
+      <span class="pill ${tl==='Expirado'?'pill-expired':'pill-time'}">⏱ ${tl}</span>
+      ${ownerPill}
+    </div>
+    <div class="link-row"><div class="link-box">${link}</div></div>
+    <div class="actions">
+      <button class="btn btn-sm btn-copy" id="copy-${f.folder_id}" onclick="copyLink('${link}','${f.folder_id}')">📋 Copiar enlace</button>
+      <button class="btn btn-sm btn-ghost" onclick="openPublic('${f.folder_id}')">🔗 Abrir</button>
+      ${addBtn}
+      <button class="btn btn-sm btn-danger" onclick="deleteFolder('${f.folder_id}',true)">🗑️ Eliminar</button>
+    </div>
+  </div>`;
+}
+
+function openAddFiles(folderId){
+  addFilesTargetFolder=folderId;
+  const inp=document.createElement('input');
+  inp.type='file';inp.multiple=true;inp.accept='image/*,video/*';
+  inp.onchange=e=>addMoreFiles(folderId,e.target.files);
+  inp.click();
+}
+
+async function addMoreFiles(folderId,files){
+  if(!files.length)return;
+  showToast('⬆️ Subiendo archivos…');
+  try{
+    const {data:folder,error:getErr}=await sb.from('folders').select('file_paths').eq('folder_id',folderId).single();
+    if(getErr)throw getErr;
+    const newPaths=[...folder.file_paths];
+    for(const file of files){
+      const ext=file.name.split('.').pop();
+      const path=`${folderId}/${genId(8)}.${ext}`;
+      const {error}=await sb.storage.from('files').upload(path,file,{contentType:file.type});
+      if(error)throw error;
+      newPaths.push(path);
+    }
+    const {error:updErr}=await sb.from('folders').update({file_paths:newPaths}).eq('folder_id',folderId);
+    if(updErr)throw updErr;
+    showToast('✅ Archivos agregados');
+    loadFolders();
+  }catch(e){console.error(e);showToast('❌ Error: '+e.message)}
+}
+
+async function copyLink(link,id){
+  await navigator.clipboard.writeText(link).catch(()=>{});
+  const btn=document.getElementById('copy-'+id);
+  if(btn){btn.textContent='✅ Copiado';btn.classList.add('copied');setTimeout(()=>{btn.textContent='📋 Copiar enlace';btn.classList.remove('copied')},2000)}
+  showToast('📋 Enlace copiado');
+}
+
+async function deleteFolder(folderId,updateUI=true){
+  const {data:folder}=await sb.from('folders').select('file_paths').eq('folder_id',folderId).single();
+  if(folder?.file_paths) await sb.storage.from('files').remove(folder.file_paths).catch(()=>{});
+  await sb.from('folders').delete().eq('folder_id',folderId);
+  if(updateUI){showToast('🗑️ Carpeta eliminada');loadFolders()}
+}
+
+function route(){
+  const hash=location.hash;
+  if(hash.startsWith('#/s/')){
+    document.getElementById('auth-view').style.display='none';
+    document.getElementById('home-view').style.display='none';
+    document.getElementById('public-view').style.display='block';
+    loadPublic(hash.slice(4));
+    return;
+  }
+  document.getElementById('public-view').style.display='none';
+  if(!currentUser){
+    document.getElementById('auth-view').style.display='flex';
+    document.getElementById('home-view').style.display='none';
+    return;
+  }
+  document.getElementById('auth-view').style.display='none';
+  document.getElementById('home-view').style.display='block';
+  loadFolders();
+}
+window.addEventListener('hashchange',route);
+route();
+refreshSession();
+
+async function loadPublic(folderId){
+  const content=document.getElementById('pub-content');
+  content.innerHTML='<div style="text-align:center;padding:60px;color:var(--muted)"><div class="spinner" style="width:30px;height:30px;margin:auto"></div></div>';
+  const {data:folder,error}=await sb.from('folders').select('*').eq('folder_id',folderId).single();
+  if(error||!folder||folder.expires_at<Date.now()){
+    content.innerHTML=`<div class="not-found"><div style="font-size:3rem">🔒</div><h2>Carpeta no encontrada</h2><p style="color:var(--muted)">Este enlace expiró o no existe.</p><button class="btn btn-ghost" onclick="location.hash=''">← Volver</button></div>`;
+    return;
+  }
+  await sb.from('folders').update({views:folder.views+1}).eq('folder_id',folderId);
+  document.getElementById('pub-name').textContent=folder.name;
+  document.getElementById('pub-meta').textContent=`⏱ Expira en ${timeLeft(folder.expires_at)} · ${folder.file_paths.length} archivo${folder.file_paths.length!==1?'s':''}`;
+  document.getElementById('pub-views').textContent=`${folder.views+1} vista${folder.views+1!==1?'s':''}`;
+  const images=[],videos=[];
+  for(const path of folder.file_paths){
+    const {data}=sb.storage.from('files').getPublicUrl(path);
+    const url=data.publicUrl;
+    if(/\.(mp4|mov|avi|mkv|webm)$/i.test(path)) videos.push({url,name:path.split('/').pop()});
+    else images.push({url,name:path.split('/').pop()});
+  }
+  lbImages=images;
+  let html='';
+  if(images.length){
+    html+=`<div class="section-title">Imágenes (${images.length})</div><div class="gallery-grid">`;
+    images.forEach((img,i)=>{html+=`<div class="gallery-item" onclick="openLightbox(${i})"><img src="${img.url}" alt="${img.name}" loading="lazy"/></div>`});
+    html+='</div>';
+  }
+  if(videos.length){
+    html+=`<div class="section-title">Videos (${videos.length})</div><div class="video-grid">`;
+    videos.forEach(v=>{html+=`<div class="video-item"><video src="${v.url}" controls preload="metadata"></video><div class="video-label">${v.name}</div></div>`});
+    html+='</div>';
+  }
+  html+=`<div style="margin-top:28px"><button class="btn btn-ghost" onclick="location.hash=''">← Volver al inicio</button></div>`;
+  content.innerHTML=html;
+}
+
+function openPublic(id){location.hash=`/s/${id}`}
+function copyPublicLink(){
+  navigator.clipboard.writeText(`${location.origin}${location.pathname}${location.hash}`).catch(()=>{});
+  const btn=document.getElementById('pub-copy-btn');
+  btn.textContent='✅ Copiado';btn.classList.add('copied');
+  setTimeout(()=>{btn.textContent='📋 Compartir';btn.classList.remove('copied')},2000);
+  showToast('📋 Enlace copiado');
+}
+function openLightbox(i){lbIndex=i;document.getElementById('lb-img').src=lbImages[i].url;document.getElementById('lightbox').classList.add('open')}
+function closeLightbox(){document.getElementById('lightbox').classList.remove('open')}
+function lbNav(dir,e){e.stopPropagation();lbIndex=(lbIndex+dir+lbImages.length)%lbImages.length;document.getElementById('lb-img').src=lbImages[lbIndex].url}
+setInterval(()=>{if(!location.hash.startsWith('#/s/')&&currentUser)loadFolders()},60000);
+</script>
+</body>
+</html>
